@@ -1,0 +1,14 @@
+[Unit]
+Description=Local dictation daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/local-dictation/.venv/bin/local-dictation daemon
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

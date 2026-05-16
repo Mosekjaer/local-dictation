@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-dictation"
+version = "0.1.0"
+description = "Local push-to-talk dictation for Pop!_OS COSMIC using whisper.cpp"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Frederik" }]
+dependencies = []
+
+[project.optional-dependencies]
+status-window = ["PyGObject>=3.42"]
+
+[project.scripts]
+local-dictation = "local_dictation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["local_dictation*"]
+exclude = ["tests*"]

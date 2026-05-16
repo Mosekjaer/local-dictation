@@ -1,0 +1,51 @@
+# local-dictation configuration
+# Path: ~/.config/local-dictation/config.toml
+#
+# All keys are optional; omitted keys fall back to the defaults shown here.
+# Use $ENV or ~ in path values; they expand at load time.
+
+# ---------------- whisper.cpp ----------------
+whisper_cli = "~/stt-bench/whisper.cpp/build-vulkan/bin/whisper-cli"
+model       = "~/stt-bench/whisper.cpp/models/ggml-small.bin"
+# Language for whisper-cli. "auto" omits the -l flag and lets whisper detect.
+# One of: "auto", "da", "en".
+language    = "auto"
+
+# ---------------- audio (ffmpeg) -------------
+# PulseAudio source name. "default" follows the system default source
+# (PipeWire's pipewire-pulse shim is fine).
+audio_source = "default"
+channels     = 1
+sample_rate  = 16000
+temp_dir     = "~/.cache/local-dictation/recordings"
+
+# ---------------- output ---------------------
+# Paste fallback strategy. "auto" picks the best available, in order:
+#   wtype        -> direct typing via wlroots virtual-keyboard protocol
+#                   (no clipboard mutation; may not work on COSMIC)
+#   ydotool_type -> direct typing via `ydotool type` (no clipboard
+#                   mutation; layout-dependent, needs ydotoold)
+#   ydotool      -> wl-copy + synthesised Ctrl+V via ydotool key
+#                   (mutates clipboard; needs ydotoold)
+#   clipboard    -> wl-copy only; user pastes manually
+# One of: "auto", "wtype", "ydotool_type", "ydotool", "clipboard".
+paste_method      = "auto"
+# When true, save the current clipboard before pasting and restore it
+# afterwards via a detached helper. Only text/plain;utf-8 is preserved.
+restore_clipboard = true
+
+# ---------------- ui -------------------------
+# notify-send notifications for every state transition.
+notifications = true
+# Optional always-on-top GTK status window. Defaults to off; requires
+# python3-gi which ships on Pop!_OS.
+status_window = false
+
+# ---------------- logging --------------------
+log_file  = "~/.cache/local-dictation/local-dictation.log"
+log_level = "INFO"   # DEBUG | INFO | WARNING | ERROR
+
+# ---------------- ipc ------------------------
+# Unix socket the CLI uses to talk to the daemon. Defaults to
+# $XDG_RUNTIME_DIR/local-dictation.sock; override only if you know why.
+# socket_path = "/run/user/1000/local-dictation.sock"
