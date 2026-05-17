@@ -23,14 +23,14 @@ use cosmic::{Renderer, Theme};
 use crate::Side;
 use crate::state::DaemonState;
 
-/// Number of bars.
-pub const BAR_COUNT: usize = 15;
+/// Number of bars. More bars = smoother wavy look.
+pub const BAR_COUNT: usize = 31;
+/// Edge weight (at i = 0 or i = BAR_COUNT - 1).
+const WEIGHT_EDGE: f32 = 0.55;
+/// Centre weight (at i = (BAR_COUNT - 1) / 2).
+const WEIGHT_CENTRE: f32 = 1.20;
 /// EMA smoothing factor.
 pub const EMA_ALPHA: f32 = 0.4;
-/// Per-bar weight — bell curve, taller in the middle.
-pub const BAR_WEIGHTS: [f32; BAR_COUNT] = [
-    0.55, 0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.20, 1.15, 1.05, 0.95, 0.85, 0.75, 0.65, 0.55,
-];
 /// Idle baseline height as a fraction of canvas height. Bars are not rendered
 /// when the daemon is idle, but we keep a small value here so the smoothing
 /// starts from a sensible state when recording begins.
@@ -40,6 +40,15 @@ const PULSE_HZ: f32 = 1.5;
 /// Per-bar oscillation depth applied during recording — scaled by loudness so
 /// quiet sections still look mostly bell-shaped while loud sections look wavy.
 const WIGGLE_DEPTH: f32 = 0.30;
+
+/// Bell-curve weight for bar `i`. Linear interpolation between
+/// `WEIGHT_CENTRE` in the middle and `WEIGHT_EDGE` at the edges.
+#[inline]
+fn bar_weight(i: usize) -> f32 {
+    let centre = (BAR_COUNT as f32 - 1.0) * 0.5;
+    let dist = (i as f32 - centre).abs() / centre;
+    WEIGHT_CENTRE - dist * (WEIGHT_CENTRE - WEIGHT_EDGE)
+}
 
 /// Persistent per-bar state owned by the applet model. The canvas itself
 /// takes an immutable snapshot at draw time.
@@ -219,13 +228,13 @@ pub fn compute_targets(
             let normalized = ((mixed_db + 60.0) / 60.0).clamp(0.0, 1.0);
             let base = IDLE_HEIGHT + (1.0 - IDLE_HEIGHT) * normalized;
             for (i, v) in out.iter_mut().enumerate() {
-                let weight = BAR_WEIGHTS[i];
+                let weight = bar_weight(i);
                 // Per-bar oscillation: each bar has its own frequency and
                 // phase so adjacent bars move out of sync, giving the wavy
                 // look. Amplitude scales with loudness so a quiet signal
                 // stays bell-shaped.
-                let wiggle_freq = 1.7 + (i as f32) * 0.23;
-                let wiggle_phase = (i as f32) * 1.1;
+                let wiggle_freq = 1.7 + (i as f32) * 0.13;
+                let wiggle_phase = (i as f32) * 0.55;
                 let wiggle = (elapsed_seconds * std::f32::consts::TAU * wiggle_freq
                     + wiggle_phase)
                     .sin();

@@ -218,13 +218,13 @@ impl cosmic::Application for Applet {
             error_active: self.error_started_at.is_some(),
         };
 
-        // Layout: 15 narrow bars (~5 px + 1 px gap) need ~90 px usable.
-        // Use the panel's suggested size for height so we match neighbour
-        // applets like CosmicAppletTime.
+        // Layout: 31 narrow bars (~3 px + 1 px gap) need ~120 px usable;
+        // 140 px gives a small horizontal margin. Use the panel's suggested
+        // size for height so we match neighbour applets like CosmicAppletTime.
         let (_, h) = self.core.applet.suggested_size(true);
         let panel_h = h.max(20) as f32;
         let canvas_widget = canvas(program)
-            .width(Length::Fixed(100.0))
+            .width(Length::Fixed(140.0))
             .height(Length::Fixed(panel_h));
 
         autosize::autosize(canvas_widget, AUTOSIZE_ID.clone()).into()
