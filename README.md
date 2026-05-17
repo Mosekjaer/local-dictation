@@ -122,6 +122,56 @@ is optional; omitted keys use the defaults shown in `config.example.toml`.
 `--language auto|da|en` is also accepted on `start`, `toggle`, and
 `transcribe` to override the configured default for that invocation.
 
+`--live` / `--no-live` is accepted on `start` and `toggle` to override
+`live_typing` in the config. See [Live typing](#live-typing) below.
+
+## Live typing
+
+Default behaviour: hold-to-talk, release, text is typed in one shot.
+This is the most accurate mode and remains the default.
+
+`local-dictation toggle --live` switches to a streaming mode where
+transcribed text appears at the cursor while you are still speaking.
+The daemon spawns a `whisper-server` subprocess on first use and runs a
+sliding-window re-transcription loop, committing prefixes that have
+been stable across consecutive passes. Tunables live in `config.toml`
+under the `live_*` keys.
+
+**Tradeoffs.** Live mode is a deliberate accuracy/latency compromise:
+
+- **Accuracy is worse than batch.** Whisper was trained on 30 s
+  contexts; partial-utterance inference is its weak side. Expect a
+  few percent more word errors than batch mode produces on the same
+  audio.
+- **Visible revisions.** Whisper occasionally rewrites the last few
+  characters as more context arrives. The typer issues backspaces and
+  re-types, so you may see flickering at the cursor.
+- **Backspace cap.** A revision spanning more than 50 characters is
+  not back-corrected — the typer keeps typing forward and the final
+  authoritative pass at end-of-utterance re-syncs the text.
+- **Focus changes are unsafe.** If you click into a different window
+  mid-session, subsequent backspaces will delete text in the new
+  window. Wayland does not let us detect this; do not click away from
+  the target while live mode is active.
+
+**Enable.** Per invocation:
+
+```
+local-dictation toggle --live
+```
+
+Or set as default:
+
+```toml
+# ~/.config/local-dictation/config.toml
+live_typing = true
+```
+
+**Fallback.** If `whisper-server` cannot be reached (binary missing,
+port in use, VAD model not on disk), the daemon logs a warning,
+shows an error notification, and falls back to batch mode for that
+invocation. `local-dictation doctor` surfaces both issues as `WARN`.
+
 ## Troubleshooting
 
 **ydotoold not running.** `local-dictation doctor` will warn if the

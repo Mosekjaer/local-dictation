@@ -258,6 +258,9 @@ impl Applet {
             } => {
                 self.last_meter = Some(MeterSample { peak_db, rms_db });
             }
+            // Live-mode transcript events: accepted so the subscriber loop
+            // does not log warnings, but the applet does not render them.
+            Event::TranscriptPartial { .. } | Event::TranscriptFinal { .. } => {}
         }
     }
 }

@@ -50,9 +50,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "toggle", help="toggle recording (idle->record, record->transcribe)"
     )
     p_toggle.add_argument("--language", choices=_LANG_CHOICES, default=None)
+    _add_live_flag(p_toggle)
 
     p_start = sub.add_parser("start", help="start recording")
     p_start.add_argument("--language", choices=_LANG_CHOICES, default=None)
+    _add_live_flag(p_start)
 
     sub.add_parser("stop", help="stop recording and transcribe")
     sub.add_parser("status", help="print daemon state")
@@ -75,6 +77,23 @@ def _build_parser() -> argparse.ArgumentParser:
             break
 
     return parser
+
+
+def _add_live_flag(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--live",
+        dest="live",
+        action="store_true",
+        default=None,
+        help="stream transcript at the cursor as you speak (overrides config)",
+    )
+    group.add_argument(
+        "--no-live",
+        dest="live",
+        action="store_false",
+        help="force batch mode even if live_typing=true in config",
+    )
 
 
 def _load_config(path: Optional[Path]) -> Config:
@@ -164,12 +183,19 @@ def _cmd_doctor(config: Config) -> int:
     return 2 if any_required_fail else 0
 
 
-def _cmd_ipc_simple(cmd: str, config: Config, language: Optional[str] = None) -> int:
+def _cmd_ipc_simple(
+    cmd: str,
+    config: Config,
+    language: Optional[str] = None,
+    live: Optional[bool] = None,
+) -> int:
     req: dict = {"cmd": cmd}
     if language is not None:
         req["language"] = language
     elif cmd in {"toggle", "start"}:
         req["language"] = None  # explicit "use config default"
+    if live is not None and cmd in {"toggle", "start"}:
+        req["live"] = live
 
     reply = _send_with_autostart(req, config)
     if not reply.get("ok"):
@@ -235,9 +261,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if cmd == "doctor":
         return _cmd_doctor(config)
     if cmd == "toggle":
-        return _cmd_ipc_simple("toggle", config, args.language)
+        return _cmd_ipc_simple("toggle", config, args.language, args.live)
     if cmd == "start":
-        return _cmd_ipc_simple("start", config, args.language)
+        return _cmd_ipc_simple("start", config, args.language, args.live)
     if cmd == "stop":
         return _cmd_ipc_simple("stop", config)
     if cmd == "status":

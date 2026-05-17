@@ -191,6 +191,51 @@ def _check_events_socket_dir(config: Config) -> Check:
                 pass
 
 
+def _check_whisper_server(config: Config) -> Check:
+    p = getattr(config, "whisper_server_bin", None)
+    if p is None:
+        return Check(
+            "whisper-server",
+            "WARN",
+            "whisper_server_bin not configured; --live unavailable",
+            required=False,
+        )
+    if p.exists() and os.access(p, os.X_OK):
+        return Check("whisper-server", "OK", str(p), required=False)
+    if p.exists():
+        return Check(
+            "whisper-server",
+            "WARN",
+            f"{p} is not executable; --live unavailable",
+            required=False,
+        )
+    return Check(
+        "whisper-server",
+        "WARN",
+        f"{p} does not exist; --live unavailable",
+        required=False,
+    )
+
+
+def _check_vad_model(config: Config) -> Check:
+    p = getattr(config, "vad_model", None)
+    if p is None:
+        return Check(
+            "vad-model",
+            "WARN",
+            "vad_model not configured; --live will hallucinate more during silence",
+            required=False,
+        )
+    if p.exists():
+        return Check("vad-model", "OK", str(p), required=False)
+    return Check(
+        "vad-model",
+        "WARN",
+        f"{p} does not exist; --live will hallucinate more during silence",
+        required=False,
+    )
+
+
 def _check_cosmic_desktop() -> Check:
     val = os.environ.get("XDG_CURRENT_DESKTOP", "")
     if "COSMIC" in val.upper():
@@ -242,5 +287,7 @@ def run_checks(config: Config) -> list[Check]:
     checks.append(_check_systemctl_user())
     checks.append(_check_cosmic_desktop())
     checks.append(_check_events_socket_dir(config))
+    checks.append(_check_whisper_server(config))
+    checks.append(_check_vad_model(config))
 
     return checks

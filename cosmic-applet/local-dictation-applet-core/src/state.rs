@@ -40,8 +40,14 @@ impl DaemonState {
 /// - `{"type":"hello","version":1,"daemon_state":"...","ts":<f64>}`
 /// - `{"type":"state","state":"...","ts":<f64>}`
 /// - `{"type":"meter","peak_db":<f64>,"rms_db":<f64>,"ts":<f64>}`
+/// - `{"type":"transcript_partial","committed":"...","tentative":"...","ts":<f64>}`
+/// - `{"type":"transcript_final","text":"...","ts":<f64>}`
+///
+/// The transcript_* variants are only emitted during a `--live` session.
+/// The applet does not currently render them but accepts them so the
+/// subscriber loop does not log warnings.
 #[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Hello {
         version: u32,
@@ -55,6 +61,15 @@ pub enum Event {
     Meter {
         peak_db: f64,
         rms_db: f64,
+        ts: f64,
+    },
+    TranscriptPartial {
+        committed: String,
+        tentative: String,
+        ts: f64,
+    },
+    TranscriptFinal {
+        text: String,
         ts: f64,
     },
 }
@@ -129,6 +144,33 @@ mod tests {
         let json = r#"{"type":"garbage","ts":0.0}"#;
         let res: Result<Event, _> = serde_json::from_str(json);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn decodes_transcript_partial() {
+        let json = r#"{"type":"transcript_partial","committed":"hello","tentative":"world","ts":1.0}"#;
+        let ev: Event = serde_json::from_str(json).unwrap();
+        match ev {
+            Event::TranscriptPartial { committed, tentative, ts } => {
+                assert_eq!(committed, "hello");
+                assert_eq!(tentative, "world");
+                assert_eq!(ts, 1.0);
+            }
+            other => panic!("expected TranscriptPartial, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decodes_transcript_final() {
+        let json = r#"{"type":"transcript_final","text":"hello world","ts":2.0}"#;
+        let ev: Event = serde_json::from_str(json).unwrap();
+        match ev {
+            Event::TranscriptFinal { text, ts } => {
+                assert_eq!(text, "hello world");
+                assert_eq!(ts, 2.0);
+            }
+            other => panic!("expected TranscriptFinal, got {other:?}"),
+        }
     }
 
     #[test]

@@ -31,8 +31,18 @@ class Config:
             "~/stt-bench/whisper.cpp/build-vulkan/bin/whisper-cli"
         )
     )
+    whisper_server_bin: Path = field(
+        default_factory=lambda: _expand(
+            "~/stt-bench/whisper.cpp/build-vulkan/bin/whisper-server"
+        )
+    )
     model: Path = field(
         default_factory=lambda: _expand("~/stt-bench/whisper.cpp/models/ggml-small.bin")
+    )
+    vad_model: Path | None = field(
+        default_factory=lambda: _expand(
+            "~/stt-bench/whisper.cpp/models/for-tests-silero-v6.2.0-ggml.bin"
+        )
     )
     language: Language = "auto"
 
@@ -47,6 +57,15 @@ class Config:
     # output
     paste_method: PasteMethod = "auto"
     restore_clipboard: bool = True
+
+    # live typing
+    live_typing: bool = False
+    live_chunk_ms: int = 500
+    live_window_s: int = 10
+    live_stable_passes: int = 2
+    live_hallucination_filter: bool = True
+    whisper_server_host: str = "127.0.0.1"
+    whisper_server_port: int = 38080
 
     # ui
     notifications: NotificationMode = "all"
@@ -85,7 +104,9 @@ class Config:
 
 _PATH_FIELDS = {
     "whisper_cli",
+    "whisper_server_bin",
     "model",
+    "vad_model",
     "temp_dir",
     "log_file",
     "socket_path",
@@ -111,7 +132,9 @@ def load(path: Path | None = None) -> Config:
     for key, value in data.items():
         if key not in known:
             continue
-        if key in _PATH_FIELDS and isinstance(value, str):
+        if key == "vad_model" and isinstance(value, str) and value == "":
+            value = None
+        elif key in _PATH_FIELDS and isinstance(value, str):
             value = _expand(value)
         if key == "notifications":
             value = _normalize_notifications(value)

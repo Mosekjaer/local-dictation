@@ -10,9 +10,18 @@ Wire protocol (each line is a complete JSON object)::
     {"type":"hello","version":1,"daemon_state":"<state>","ts":<float>}
     {"type":"state","state":"idle"|"recording"|"transcribing"|"error","ts":<float>}
     {"type":"meter","peak_db":<float>,"rms_db":<float>,"ts":<float>}
+    {"type":"transcript_partial","committed":"<str>","tentative":"<str>","ts":<float>}
+    {"type":"transcript_final","text":"<str>","ts":<float>}
 
 ``peak_db`` and ``rms_db`` are dBFS in the range ``(-120, 0]``. ``-inf`` is
 clamped to ``-120.0`` so consumers never need to handle JSON ``Infinity``.
+
+``transcript_partial`` and ``transcript_final`` events are only emitted
+while the daemon is running a ``--live`` session. ``committed`` is the
+cumulative monotonic prefix; ``tentative`` is the current best-guess tail
+that may still revise. ``transcript_final.text`` is the authoritative
+transcription produced by re-running whisper on the complete WAV at the
+end of the utterance.
 
 Slow-subscriber policy: each subscriber has a bounded ``queue.Queue``
 (``maxsize=64``). Publishing uses ``put_nowait``; on ``queue.Full`` we

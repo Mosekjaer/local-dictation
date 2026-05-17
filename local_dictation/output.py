@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import threading
 from typing import Literal
 
 from . import clipboard
@@ -238,3 +239,185 @@ class Output:
     @staticmethod
     def _have(binary: str) -> bool:
         return shutil.which(binary) is not None
+
+    # Private helper used by IncrementalTyper. Live mode must never mutate
+    # the clipboard for every revision, so we only allow the two direct-
+    # typing strategies here; the clipboard-paste fallbacks are off-limits.
+    def _type_text(self, text: str) -> None:
+        """Type `text` using wtype or ydotool. No clipboard mutation.
+
+        Raises OutputError if neither typed strategy is usable.
+        """
+        if not text:
+            return
+
+        method = self._config.paste_method
+        errors: list[str] = []
+
+        if method in ("auto", "wtype"):
+            if self._have("wtype"):
+                try:
+                    self._wtype(text)
+                    return
+                except OutputError as e:
+                    errors.append(f"wtype: {e}")
+                    if method == "wtype":
+                        raise
+            else:
+                if method == "wtype":
+                    raise OutputError("wtype not installed but paste_method=wtype")
+                errors.append("wtype: not installed")
+
+        if method in ("auto", "ydotool_type"):
+            if self._have("ydotool") and clipboard.ydotoold_socket_path():
+                try:
+                    self._ydotool_type(text)
+                    return
+                except OutputError as e:
+                    errors.append(f"ydotool_type: {e}")
+                    if method == "ydotool_type":
+                        raise
+            else:
+                missing = []
+                if not self._have("ydotool"):
+                    missing.append("ydotool")
+                if not clipboard.ydotoold_socket_path():
+                    missing.append("ydotoold socket")
+                msg = "ydotool_type unavailable: " + ", ".join(missing)
+                if method == "ydotool_type":
+                    raise OutputError(msg)
+                errors.append(msg)
+
+        raise OutputError(
+            "no direct-typing strategy available for live mode: "
+            + " | ".join(errors)
+        )
+
+
+# ---------------------------------------------------------------------- #
+# Incremental typer for live dictation
+# ---------------------------------------------------------------------- #
+
+
+# One backspace as ydotool key tokens: key 14 (KEY_BACKSPACE) down, then up.
+_BACKSPACE_KEYS = ("14:1", "14:0")
+
+
+class IncrementalTyper:
+    """Wrap an Output instance with diff-against-last-call typing.
+
+    Thread-safe. Calls to set_text() / finalize() are serialised by an
+    internal lock so concurrent invocations from the StreamEngine worker
+    thread don't interleave subprocess calls.
+    """
+
+    # Sanity cap on backspaces emitted in a single revision.
+    # If the diff implies > BACKSPACE_CAP characters to delete, the typer
+    # logs a warning and only types the new suffix (no backspaces). The
+    # final_wav pass at the end of the utterance will re-sync via
+    # finalize().
+    BACKSPACE_CAP: int = 50
+
+    def __init__(self, output: Output) -> None:
+        self._output = output
+        self._last = ""
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------ #
+    # public API
+    # ------------------------------------------------------------------ #
+
+    def set_text(self, target: str) -> None:
+        """Make the focused window's text-since-baseline match `target`.
+
+        Computes longest common prefix vs the last typed state; emits
+        N backspaces for the changed suffix, then types the new suffix.
+
+        If N > BACKSPACE_CAP, types the new suffix only and logs a
+        warning. Raises OutputError if the underlying Output strategy
+        fails.
+        """
+        with self._lock:
+            self._apply_locked(target)
+
+    def finalize(self, target: str) -> None:
+        """Same as set_text but also resets internal baseline to "" so a
+        subsequent live session starts fresh.
+        """
+        with self._lock:
+            self._apply_locked(target)
+            self._last = ""
+
+    def reset(self) -> None:
+        """Forget the baseline without typing anything. Used if the
+        daemon needs to abandon the current session (e.g. transitioning
+        to ERROR).
+        """
+        with self._lock:
+            self._last = ""
+
+    # ------------------------------------------------------------------ #
+    # internals
+    # ------------------------------------------------------------------ #
+
+    def _apply_locked(self, target: str) -> None:
+        last = self._last
+        if target == last:
+            return
+
+        prefix_len = _common_prefix_len(last, target)
+        backspaces = len(last) - prefix_len
+        suffix = target[prefix_len:]
+
+        if backspaces > self.BACKSPACE_CAP:
+            log.warning(
+                "IncrementalTyper: diff implies %d backspaces (> cap %d); "
+                "appending new suffix only — final pass will re-sync",
+                backspaces,
+                self.BACKSPACE_CAP,
+            )
+            if suffix:
+                self._output._type_text(suffix)
+            # Treat the visible state as "last + suffix" — we did not
+            # backspace, so the on-screen text is now last+suffix. Set
+            # baseline to that so subsequent diffs are computed against
+            # the actual screen state.
+            self._last = last + suffix
+            return
+
+        if backspaces > 0:
+            self._emit_backspaces(backspaces)
+
+        if suffix:
+            self._output._type_text(suffix)
+
+        self._last = target
+
+    def _emit_backspaces(self, count: int) -> None:
+        # Emit ALL backspaces in a single ydotool key invocation. One
+        # subprocess call per keystroke would be wasteful and racy.
+        argv = ["ydotool", "key", *(_BACKSPACE_KEYS * count)]
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except FileNotFoundError as e:
+            raise OutputError(f"ydotool missing for backspace: {e}") from e
+        except subprocess.TimeoutExpired as e:
+            raise OutputError("ydotool key (backspace) timed out") from e
+        if proc.returncode != 0:
+            raise OutputError(
+                f"ydotool key (backspace) exited {proc.returncode}: "
+                f"{proc.stderr.decode(errors='replace').strip()}"
+            )
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i

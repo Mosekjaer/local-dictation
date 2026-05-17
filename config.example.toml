@@ -5,11 +5,15 @@
 # Use $ENV or ~ in path values; they expand at load time.
 
 # ---------------- whisper.cpp ----------------
-whisper_cli = "~/stt-bench/whisper.cpp/build-vulkan/bin/whisper-cli"
-model       = "~/stt-bench/whisper.cpp/models/ggml-small.bin"
+whisper_cli         = "~/stt-bench/whisper.cpp/build-vulkan/bin/whisper-cli"
+whisper_server_bin  = "~/stt-bench/whisper.cpp/build-vulkan/bin/whisper-server"
+model               = "~/stt-bench/whisper.cpp/models/ggml-small.bin"
+# VAD model used by whisper-server during --live. Set to an empty string
+# to disable VAD (live mode will hallucinate more during silence).
+vad_model           = "~/stt-bench/whisper.cpp/models/for-tests-silero-v6.2.0-ggml.bin"
 # Language for whisper-cli. "auto" omits the -l flag and lets whisper detect.
 # One of: "auto", "da", "en".
-language    = "auto"
+language            = "auto"
 
 # ---------------- audio (ffmpeg) -------------
 # PulseAudio source name. "default" follows the system default source
@@ -33,6 +37,34 @@ paste_method      = "auto"
 # When true, save the current clipboard before pasting and restore it
 # afterwards via a detached helper. Only text/plain;utf-8 is preserved.
 restore_clipboard = true
+
+# ---------------- live typing ----------------
+# Stream the transcript at the cursor while you are still speaking,
+# rather than batch-typing on release. Accuracy is noticeably worse
+# than batch mode and you will occasionally see whisper revise the last
+# few characters. Push-to-talk batch mode remains the default.
+#
+# CLI flags `--live` / `--no-live` on `toggle` and `start` override
+# this per-invocation.
+live_typing                = false
+# Sliding-window re-transcription interval (ms). Lower = lower latency
+# but higher whisper-server load.
+live_chunk_ms              = 500
+# Ring buffer window (seconds). Whisper sees at most this much trailing
+# audio per pass. 10 s is the upper bound of whisper's training context.
+live_window_s              = 10
+# A character prefix is "committed" (typed) once it has been identical
+# across this many consecutive transcription passes. Lower = faster
+# commit but more visible revisions. Higher = fewer corrections but
+# slower text appearance.
+live_stable_passes         = 2
+# Drop the well-known silence-hallucinations ("you", "thanks for
+# watching", "[music]", ".") from the tentative tail.
+live_hallucination_filter  = true
+# whisper-server is spawned lazily by the daemon on the first --live
+# request and reused across the daemon's lifetime.
+whisper_server_host        = "127.0.0.1"
+whisper_server_port        = 38080
 
 # ---------------- ui -------------------------
 # Desktop notifications. One of:
