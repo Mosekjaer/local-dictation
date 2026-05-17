@@ -157,7 +157,7 @@ impl cosmic::Application for Applet {
                 // Drive the per-bar EMA forward toward its target. The widget
                 // also reads `start_time` for the transcribing pulse.
                 if let Ok(mut eq) = self.eq.lock() {
-                    eq.advance(self.daemon_state, self.last_meter, self.start_time);
+                    eq.advance(self.side, self.daemon_state, self.last_meter, self.start_time);
                 }
                 // Clear the error flash after ~300 ms.
                 if let Some(started) = self.error_started_at {
@@ -218,9 +218,8 @@ impl cosmic::Application for Applet {
             error_active: self.error_started_at.is_some(),
         };
 
-        // Layout: 31 narrow bars (~3 px + 1 px gap) need ~120 px usable;
-        // 140 px gives a small horizontal margin. Use the panel's suggested
-        // size for height so we match neighbour applets like CosmicAppletTime.
+        // Layout: 16 pill bars at 80 % fill / 20 % gap per slot. 140 px gives
+        // ~7 px bars + ~1.8 px gaps. Panel height matches neighbour applets.
         let (_, h) = self.core.applet.suggested_size(true);
         let panel_h = h.max(20) as f32;
         let canvas_widget = canvas(program)

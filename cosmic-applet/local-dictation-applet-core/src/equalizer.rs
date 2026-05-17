@@ -18,36 +18,67 @@ use std::time::Instant;
 
 use cosmic::iced::widget::canvas;
 use cosmic::iced::{Color, Point, Rectangle, Size, mouse};
+use cosmic::iced::border::Radius;
+use cosmic::iced::widget::canvas::{Fill, path};
 use cosmic::{Renderer, Theme};
 
 use crate::Side;
 use crate::state::DaemonState;
 
-/// Number of bars. More bars = smoother wavy look.
-pub const BAR_COUNT: usize = 31;
-/// Edge weight (at i = 0 or i = BAR_COUNT - 1).
-const WEIGHT_EDGE: f32 = 0.55;
-/// Centre weight (at i = (BAR_COUNT - 1) / 2).
-const WEIGHT_CENTRE: f32 = 1.20;
+/// Total number of synthesised frequency bands across both applets.
+/// Each applet renders `TOTAL_BANDS / 2` bars.
+pub const TOTAL_BANDS: usize = 32;
+/// Number of bars rendered per applet.
+pub const BAR_COUNT: usize = TOTAL_BANDS / 2;
 /// EMA smoothing factor.
-pub const EMA_ALPHA: f32 = 0.4;
+pub const EMA_ALPHA: f32 = 0.35;
 /// Idle baseline height as a fraction of canvas height. Bars are not rendered
 /// when the daemon is idle, but we keep a small value here so the smoothing
 /// starts from a sensible state when recording begins.
 const IDLE_HEIGHT: f32 = 0.10;
 /// Pulse frequency in Hz for the transcribing animation.
 const PULSE_HZ: f32 = 1.5;
-/// Per-bar oscillation depth applied during recording — scaled by loudness so
-/// quiet sections still look mostly bell-shaped while loud sections look wavy.
-const WIGGLE_DEPTH: f32 = 0.30;
+/// Bar:gap split — 80 % bar, 20 % gap of the per-bar slot.
+const BAR_FILL_RATIO: f32 = 0.8;
+/// Minimum bar height in pixels so an "empty" band still shows as a pill.
+const MIN_BAR_HEIGHT_PX: f32 = 4.0;
+/// Corner radius — large enough that any reasonable bar width becomes a pill.
+const CORNER_RADIUS: f32 = 24.0;
 
-/// Bell-curve weight for bar `i`. Linear interpolation between
-/// `WEIGHT_CENTRE` in the middle and `WEIGHT_EDGE` at the edges.
+/// Speech-frequency response: low at the extremes, peak in mid-high, slight
+/// taper at the top. Returns a multiplier in roughly [0.0, 1.0] for a band
+/// at `normalized_freq ∈ [0.0, 1.0]`.
 #[inline]
-fn bar_weight(i: usize) -> f32 {
-    let centre = (BAR_COUNT as f32 - 1.0) * 0.5;
-    let dist = (i as f32 - centre).abs() / centre;
-    WEIGHT_CENTRE - dist * (WEIGHT_CENTRE - WEIGHT_EDGE)
+fn speech_response(normalized_freq: f32) -> f32 {
+    if normalized_freq < 0.1 {
+        0.2 * normalized_freq / 0.1
+    } else if normalized_freq < 0.3 {
+        0.2 + 0.3 * (normalized_freq - 0.1) / 0.2
+    } else if normalized_freq < 0.6 {
+        0.5 + 0.5 * (normalized_freq - 0.3) / 0.3
+    } else if normalized_freq < 0.8 {
+        1.0 - 0.2 * (normalized_freq - 0.6) / 0.2
+    } else {
+        0.8 * (1.0 - normalized_freq) / 0.2
+    }
+}
+
+/// Per-band variation derived from the golden ratio so adjacent bands look
+/// independent without being random.
+#[inline]
+fn band_variation(global_band_index: usize) -> f32 {
+    ((global_band_index as f32 * 1.618) % 1.0) * 0.3 + 0.85
+}
+
+/// Convert a Side into the global band index of the first band this applet
+/// renders. Left renders the low half of the spectrum; right renders the high
+/// half. This way the two applets together display a continuous spectrum.
+#[inline]
+fn first_global_band_for(side: Side) -> usize {
+    match side {
+        Side::Left => 0,
+        Side::Right => TOTAL_BANDS / 2,
+    }
 }
 
 /// Persistent per-bar state owned by the applet model. The canvas itself
@@ -68,12 +99,13 @@ impl EqualizerState {
     /// current `state` + most recent meter sample. Called from the 30 fps tick.
     pub fn advance(
         &mut self,
+        side: Side,
         state: DaemonState,
         last_meter: Option<crate::MeterSample>,
         start_time: Instant,
     ) {
         let elapsed = start_time.elapsed().as_secs_f32();
-        let targets = compute_targets(state, last_meter, elapsed);
+        let targets = compute_targets(side, state, last_meter, elapsed);
         for i in 0..BAR_COUNT {
             self.heights[i] = self.heights[i] + EMA_ALPHA * (targets[i] - self.heights[i]);
         }
@@ -126,34 +158,33 @@ impl<M> canvas::Program<M, Theme, Renderer> for EqualizerCanvas {
         let canvas_w = bounds.width.max(1.0);
         let canvas_h = bounds.height.max(1.0);
 
-        // Layout: BAR_COUNT narrow bars with a 1 px gap, centred horizontally.
-        let gap_px: f32 = 1.0;
-        let total_gap = gap_px * (BAR_COUNT as f32 - 1.0);
-        let bar_w = ((canvas_w - total_gap) / BAR_COUNT as f32).max(1.0);
-        let used_w = bar_w * BAR_COUNT as f32 + total_gap;
+        // 80 % bar, 20 % gap. Slot = bar + gap.
+        let slot_w = canvas_w / BAR_COUNT as f32;
+        let bar_w = slot_w * BAR_FILL_RATIO;
+        let gap_w = slot_w * (1.0 - BAR_FILL_RATIO);
+        let used_w = bar_w * BAR_COUNT as f32 + gap_w * (BAR_COUNT as f32 - 1.0);
         let x_start = (canvas_w - used_w).max(0.0) / 2.0;
 
         let center_y = canvas_h / 2.0;
         let color = self.bar_color(theme);
 
         for i in 0..BAR_COUNT {
-            // Optional mirror for Side::Right so the two flanks aren't an
-            // exact copy of each other.
-            let idx = match self.side {
-                Side::Left => i,
-                Side::Right => BAR_COUNT - 1 - i,
-            };
-            let h_norm = self.snapshot.heights[idx].clamp(0.0, 1.0);
+            let h_norm = self.snapshot.heights[i].clamp(0.0, 1.0);
             if h_norm < 0.01 {
-                // Skip near-zero bars entirely (idle, or far below floor).
                 continue;
             }
-            let bar_h = (canvas_h * h_norm).max(1.0);
-            let x = x_start + i as f32 * (bar_w + gap_px);
+            let bar_h = (canvas_h * h_norm).max(MIN_BAR_HEIGHT_PX);
+            let x = x_start + i as f32 * (bar_w + gap_w);
             // Grow both up and down from the vertical centre.
             let y = (center_y - bar_h / 2.0).max(0.0);
 
-            frame.fill_rectangle(Point::new(x, y), Size::new(bar_w, bar_h), color);
+            let mut pb = path::Builder::new();
+            pb.rounded_rectangle(
+                Point::new(x, y),
+                Size::new(bar_w, bar_h),
+                Radius::new(CORNER_RADIUS),
+            );
+            frame.fill(&pb.build(), Fill::from(color));
         }
 
         vec![frame.into_geometry()]
@@ -187,7 +218,14 @@ impl EqualizerCanvas {
 }
 
 /// Pure target-height computation, exposed for unit tests.
+///
+/// Produces one target value per rendered bar (i.e. `BAR_COUNT` values for the
+/// half of the spectrum this `side` is responsible for). The synthesised band
+/// uses a speech-frequency response curve plus a deterministic per-band
+/// golden-ratio variation, mirroring the approach in the upstream `super-stt`
+/// applet.
 pub fn compute_targets(
+    side: Side,
     state: DaemonState,
     last_meter: Option<crate::MeterSample>,
     elapsed_seconds: f32,
@@ -203,7 +241,6 @@ pub fn compute_targets(
             }
         }
         DaemonState::Error => {
-            // Error flash: full height, the color path turns it red.
             for v in out.iter_mut() {
                 *v = 1.0;
             }
@@ -218,29 +255,23 @@ pub fn compute_targets(
             }
         }
         DaemonState::Recording => {
-            // Use peak as the dominant driver; RMS smooths out the floor.
+            // Map peak/RMS dB to a single audio level in [0, 1].
             let (peak_db, rms_db) = match last_meter {
                 Some(m) => (m.peak_db as f32, m.rms_db as f32),
                 None => (-60.0, -60.0),
             };
             let mixed_db = 0.7 * peak_db + 0.3 * rms_db;
-            // Map [-60, 0] dB -> [IDLE_HEIGHT, 1.0] linearly. Clamp.
-            let normalized = ((mixed_db + 60.0) / 60.0).clamp(0.0, 1.0);
-            let base = IDLE_HEIGHT + (1.0 - IDLE_HEIGHT) * normalized;
+            let audio_level = ((mixed_db + 60.0) / 60.0).clamp(0.0, 1.0);
+
+            // Synthesise this side's half of the spectrum.
+            let first_band = first_global_band_for(side);
             for (i, v) in out.iter_mut().enumerate() {
-                let weight = bar_weight(i);
-                // Per-bar oscillation: each bar has its own frequency and
-                // phase so adjacent bars move out of sync, giving the wavy
-                // look. Amplitude scales with loudness so a quiet signal
-                // stays bell-shaped.
-                let wiggle_freq = 1.7 + (i as f32) * 0.13;
-                let wiggle_phase = (i as f32) * 0.55;
-                let wiggle = (elapsed_seconds * std::f32::consts::TAU * wiggle_freq
-                    + wiggle_phase)
-                    .sin();
-                let modulator = 1.0 + wiggle * WIGGLE_DEPTH * normalized;
-                let weighted = base * weight * modulator;
-                *v = weighted.clamp(0.05, 1.0);
+                let global_idx = first_band + i;
+                let normalized_freq =
+                    global_idx as f32 / (TOTAL_BANDS as f32 - 1.0);
+                let height =
+                    audio_level * speech_response(normalized_freq) * band_variation(global_idx);
+                *v = (IDLE_HEIGHT + (1.0 - IDLE_HEIGHT) * height).clamp(0.05, 1.0);
             }
         }
     }
@@ -254,39 +285,39 @@ mod tests {
 
     #[test]
     fn idle_targets_are_baseline() {
-        let t = compute_targets(DaemonState::Idle, None, 0.0);
-        for v in t {
-            assert!((v - IDLE_HEIGHT).abs() < 1e-6);
+        for side in [Side::Left, Side::Right] {
+            let t = compute_targets(side, DaemonState::Idle, None, 0.0);
+            for v in t {
+                assert!((v - IDLE_HEIGHT).abs() < 1e-6);
+            }
         }
     }
 
     #[test]
-    fn recording_at_zero_db_drives_centre_bar_high() {
-        // Sample several phases so the per-bar wiggle averages out.
-        let centre = BAR_COUNT / 2;
-        let mut max_centre = 0.0f32;
-        for n in 0..30 {
+    fn recording_drives_some_bar_high_at_full_loudness() {
+        // With audio_level=1.0 the speech curve peaks in the mid-high range
+        // (around 60-70 % of the spectrum). Confirm at least one bar on each
+        // side gets driven well above the idle baseline.
+        for side in [Side::Left, Side::Right] {
             let t = compute_targets(
+                side,
                 DaemonState::Recording,
                 Some(MeterSample {
                     peak_db: 0.0,
                     rms_db: 0.0,
                 }),
-                n as f32 * 0.033,
+                0.0,
             );
-            if t[centre] > max_centre {
-                max_centre = t[centre];
-            }
+            let max = t.iter().cloned().fold(0.0_f32, f32::max);
+            assert!(max > 0.5, "{side:?} max bar = {max}, expected > 0.5");
         }
-        // Centre bar (weight 1.2) clamps near 1.0 at full loudness.
-        assert!(max_centre > 0.95, "centre bar never reached 0.95 ({max_centre})");
     }
 
     #[test]
     fn recording_at_minus_60_db_is_near_idle() {
-        // At -60 dB the loudness modulator is 0, so wiggle has no effect and
-        // every bar collapses to IDLE_HEIGHT * weight.
+        // audio_level collapses to 0 → height = IDLE_HEIGHT for every band.
         let t = compute_targets(
+            Side::Left,
             DaemonState::Recording,
             Some(MeterSample {
                 peak_db: -60.0,
@@ -295,15 +326,14 @@ mod tests {
             0.0,
         );
         for v in t {
-            assert!(v <= IDLE_HEIGHT * 1.21 + 1e-3);
-            assert!(v >= 0.05 - 1e-6);
+            assert!((v - IDLE_HEIGHT).abs() < 1e-5);
         }
     }
 
     #[test]
     fn recording_clamps_below_minus_60() {
-        // Daemon clamps -inf to -120 — we should treat that the same as -60.
         let t = compute_targets(
+            Side::Right,
             DaemonState::Recording,
             Some(MeterSample {
                 peak_db: -120.0,
@@ -312,14 +342,39 @@ mod tests {
             0.0,
         );
         for v in t {
-            assert!(v <= IDLE_HEIGHT * 1.21 + 1e-3);
+            assert!((v - IDLE_HEIGHT).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn left_and_right_render_different_spectrum_halves() {
+        // Same audio level, different sides → different per-bar heights.
+        // Equivalence would mean the spectrum split is broken.
+        let left = compute_targets(
+            Side::Left,
+            DaemonState::Recording,
+            Some(MeterSample { peak_db: -10.0, rms_db: -15.0 }),
+            0.0,
+        );
+        let right = compute_targets(
+            Side::Right,
+            DaemonState::Recording,
+            Some(MeterSample { peak_db: -10.0, rms_db: -15.0 }),
+            0.0,
+        );
+        let any_different = (0..BAR_COUNT).any(|i| (left[i] - right[i]).abs() > 1e-3);
+        assert!(any_different, "left and right produced identical bands");
     }
 
     #[test]
     fn transcribing_targets_stay_in_unit_range() {
         for n in 0..30 {
-            let t = compute_targets(DaemonState::Transcribing, None, n as f32 * 0.033);
+            let t = compute_targets(
+                Side::Left,
+                DaemonState::Transcribing,
+                None,
+                n as f32 * 0.033,
+            );
             for v in t {
                 assert!((0.05..=1.0).contains(&v));
             }
@@ -330,23 +385,18 @@ mod tests {
     fn ema_converges_toward_target() {
         let mut s = EqualizerState::new();
         let start = Instant::now();
-        // Force a recording sample at 0 dB and step many times.
         for _ in 0..50 {
             s.advance(
+                Side::Left,
                 DaemonState::Recording,
-                Some(MeterSample {
-                    peak_db: 0.0,
-                    rms_db: 0.0,
-                }),
+                Some(MeterSample { peak_db: 0.0, rms_db: 0.0 }),
                 start,
             );
         }
         let targets = compute_targets(
+            Side::Left,
             DaemonState::Recording,
-            Some(MeterSample {
-                peak_db: 0.0,
-                rms_db: 0.0,
-            }),
+            Some(MeterSample { peak_db: 0.0, rms_db: 0.0 }),
             start.elapsed().as_secs_f32(),
         );
         for i in 0..BAR_COUNT {
@@ -357,11 +407,8 @@ mod tests {
     #[test]
     fn ema_single_step_matches_formula() {
         let mut s = EqualizerState::new();
-        // Hand-roll: start = IDLE_HEIGHT, target = some value
-        // After one step expected = start + alpha * (target - start)
         let start_h = s.heights[0];
-        s.advance(DaemonState::Idle, None, Instant::now());
-        // Idle target equals IDLE_HEIGHT so heights don't move.
+        s.advance(Side::Left, DaemonState::Idle, None, Instant::now());
         assert!((s.heights[0] - start_h).abs() < 1e-9);
     }
 }
