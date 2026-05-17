@@ -17,6 +17,7 @@ from local_dictation.output import (
     IncrementalTyper,
     Output,
     OutputError,
+    _sanitize_for_typing,
 )
 
 
@@ -320,6 +321,32 @@ class TypeTextHelperTests(unittest.TestCase):
             with mock.patch.object(Output, "_wtype") as m_wtype:
                 out._type_text("hi")
                 m_wtype.assert_called_once_with("hi")
+
+
+class SanitizeForTypingTests(unittest.TestCase):
+    """Newlines typed via wtype/ydotool reach the focused window as Enter,
+    which submits in shells, tmux, Claude Code TUI, and chat inputs.
+    """
+
+    def test_passthrough_when_no_newlines(self) -> None:
+        self.assertEqual(_sanitize_for_typing("hello world"), "hello world")
+        self.assertEqual(_sanitize_for_typing(""), "")
+
+    def test_replaces_lf(self) -> None:
+        self.assertEqual(_sanitize_for_typing("a\nb"), "a b")
+
+    def test_replaces_cr_and_crlf(self) -> None:
+        self.assertEqual(_sanitize_for_typing("a\rb"), "a b")
+        self.assertEqual(_sanitize_for_typing("a\r\nb"), "a b")
+
+    def test_wtype_invokes_sanitizer(self) -> None:
+        cfg = SimpleNamespace(paste_method="auto", restore_clipboard=False)
+        out = Output(cfg)  # type: ignore[arg-type]
+        with mock.patch("local_dictation.output.subprocess.run") as m_run:
+            m_run.return_value = SimpleNamespace(returncode=0, stderr=b"")
+            out._wtype("line1\nline2")
+            args, kwargs = m_run.call_args
+            self.assertEqual(kwargs["input"], b"line1 line2")
 
 
 if __name__ == "__main__":

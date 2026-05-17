@@ -45,6 +45,19 @@ class OutputError(Exception):
     """Raised when every viable paste strategy has failed."""
 
 
+def _sanitize_for_typing(text: str) -> str:
+    """Replace newlines and carriage returns with spaces.
+
+    A literal \\n or \\r reaches the focused window as Enter, which
+    submits in shells, tmux/TUIs (Claude Code), and chat inputs. Typed-
+    output strategies must never emit Enter — clipboard strategies are
+    unaffected and keep newlines intact.
+    """
+    if "\n" not in text and "\r" not in text:
+        return text
+    return text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+
+
 class Output:
     def __init__(self, config: Config) -> None:
         self._config = config
@@ -151,6 +164,7 @@ class Output:
     def _wtype(self, text: str) -> None:
         # `wtype -` reads stdin and types it. No clipboard mutation, so we
         # skip the save/restore dance.
+        text = _sanitize_for_typing(text)
         try:
             proc = subprocess.run(
                 ["wtype", "-"],
@@ -173,6 +187,7 @@ class Output:
         # the corresponding keypresses through /dev/uinput. Layout-
         # dependent: characters not reachable on the active keymap may
         # be mistyped. No clipboard mutation.
+        text = _sanitize_for_typing(text)
         try:
             proc = subprocess.run(
                 ["ydotool", "type", "--file", "-"],
