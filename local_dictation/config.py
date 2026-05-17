@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Literal
 
 Language = Literal["auto", "da", "en"]
-PasteMethod = Literal["auto", "wtype", "ydotool", "clipboard"]
+PasteMethod = Literal["auto", "wtype", "ydotool_type", "ydotool", "clipboard"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+NotificationMode = Literal["all", "errors_only", "none"]
 
 
 def _expand(p: str) -> Path:
@@ -48,7 +49,7 @@ class Config:
     restore_clipboard: bool = True
 
     # ui
-    notifications: bool = True
+    notifications: NotificationMode = "all"
     status_window: bool = False
 
     # logging
@@ -112,9 +113,27 @@ def load(path: Path | None = None) -> Config:
             continue
         if key in _PATH_FIELDS and isinstance(value, str):
             value = _expand(value)
+        if key == "notifications":
+            value = _normalize_notifications(value)
         setattr(cfg, key, value)
 
     return cfg
+
+
+def _normalize_notifications(value: object) -> NotificationMode:
+    """Accept "all" / "errors_only" / "none", or a legacy bool.
+    Any other value falls back to "all" with a warning."""
+    if isinstance(value, bool):
+        return "all" if value else "none"
+    if isinstance(value, str):
+        norm = value.strip().lower()
+        if norm in ("all", "errors_only", "none"):
+            return norm  # type: ignore[return-value]
+    import logging
+    logging.getLogger(__name__).warning(
+        "invalid notifications=%r; falling back to 'all'", value
+    )
+    return "all"
 
 
 def write_default(path: Path, example_source: Path) -> bool:

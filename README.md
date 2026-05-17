@@ -89,7 +89,7 @@ is optional; omitted keys use the defaults shown in `config.example.toml`.
 | `temp_dir`          | Where audio clips are buffered before transcription.                                              |
 | `paste_method`      | `auto`, `wtype`, `ydotool_type`, `ydotool`, or `clipboard`. See below.                            |
 | `restore_clipboard` | Save and restore the previous clipboard contents around clipboard-based paste.                    |
-| `notifications`     | Send a `notify-send` notification on every state transition.                                      |
+| `notifications`     | `"all"`, `"errors_only"`, or `"none"`. `errors_only` keeps the notify-send pings for failures and clipboard-only pastes only (rely on the equalizer otherwise). Legacy `true` / `false` accepted as `"all"` / `"none"`. |
 | `status_window`     | Show a small always-on-top GTK window with the current state.                                     |
 | `log_file`          | Log file path. Rotated by size in the daemon.                                                     |
 | `log_level`         | `DEBUG`, `INFO`, `WARNING`, or `ERROR`.                                                           |

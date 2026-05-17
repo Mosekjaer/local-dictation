@@ -45,7 +45,7 @@ class Notifier:
     def on_state(self, state: State, detail: str = "") -> None:
         """Update both notification surfaces. Never raises."""
         try:
-            if self._config.notifications:
+            if self._should_send(state, detail):
                 self._notify_send(state, detail)
         except Exception:  # noqa: BLE001
             log.exception("notify-send dispatch failed (suppressed)")
@@ -56,6 +56,24 @@ class Notifier:
         except Exception:  # noqa: BLE001
             log.exception("status window update failed (suppressed)")
             self._status_window_disabled = True
+
+    # ------------------------------------------------------------------ #
+    # notification gating
+    # ------------------------------------------------------------------ #
+
+    def _should_send(self, state: State, detail: str) -> bool:
+        mode = self._config.notifications
+        if mode == "none":
+            return False
+        if mode == "all":
+            return True
+        # errors_only: surface real errors and the copied-only paste outcome
+        # (the user has to press Ctrl+V manually, so they need to know).
+        if state is State.ERROR:
+            return True
+        if state is State.IDLE and detail.startswith("copied"):
+            return True
+        return False
 
     # ------------------------------------------------------------------ #
     # notify-send
@@ -77,6 +95,11 @@ class Notifier:
         )
         if state is State.IDLE and detail:
             body = detail
+            # Copied-only paste needs the user's eyes — bump the urgency so
+            # the notification persists until dismissed.
+            if detail.startswith("copied"):
+                urgency = "normal"
+                timeout_ms = 0
         elif state is State.ERROR:
             body = detail or "Error"
 

@@ -35,8 +35,14 @@ paste_method      = "auto"
 restore_clipboard = true
 
 # ---------------- ui -------------------------
-# notify-send notifications for every state transition.
-notifications = true
+# Desktop notifications. One of:
+#   "all"          -> fire on every state transition (recording, transcribing,
+#                     pasted, error)
+#   "errors_only"  -> only fire on errors and when paste fell back to
+#                     clipboard-only (so you know to press Ctrl+V manually)
+#   "none"         -> never fire (rely on the equalizer applet alone)
+# Legacy values true/false are accepted as aliases for "all"/"none".
+notifications = "all"
 # Optional always-on-top GTK status window. Defaults to off; requires
 # python3-gi which ships on Pop!_OS.
 status_window = false
