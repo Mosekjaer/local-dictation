@@ -24,15 +24,22 @@ use crate::Side;
 use crate::state::DaemonState;
 
 /// Number of bars.
-pub const BAR_COUNT: usize = 7;
+pub const BAR_COUNT: usize = 15;
 /// EMA smoothing factor.
 pub const EMA_ALPHA: f32 = 0.4;
-/// Per-bar weight — taller in the middle.
-pub const BAR_WEIGHTS: [f32; BAR_COUNT] = [0.6, 0.8, 1.0, 1.2, 1.0, 0.8, 0.6];
-/// Idle baseline height as a fraction of canvas height.
+/// Per-bar weight — bell curve, taller in the middle.
+pub const BAR_WEIGHTS: [f32; BAR_COUNT] = [
+    0.55, 0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.20, 1.15, 1.05, 0.95, 0.85, 0.75, 0.65, 0.55,
+];
+/// Idle baseline height as a fraction of canvas height. Bars are not rendered
+/// when the daemon is idle, but we keep a small value here so the smoothing
+/// starts from a sensible state when recording begins.
 const IDLE_HEIGHT: f32 = 0.10;
 /// Pulse frequency in Hz for the transcribing animation.
 const PULSE_HZ: f32 = 1.5;
+/// Per-bar oscillation depth applied during recording — scaled by loudness so
+/// quiet sections still look mostly bell-shaped while loud sections look wavy.
+const WIGGLE_DEPTH: f32 = 0.30;
 
 /// Persistent per-bar state owned by the applet model. The canvas itself
 /// takes an immutable snapshot at draw time.
@@ -110,13 +117,14 @@ impl<M> canvas::Program<M, Theme, Renderer> for EqualizerCanvas {
         let canvas_w = bounds.width.max(1.0);
         let canvas_h = bounds.height.max(1.0);
 
-        // Layout: BAR_COUNT bars with 2 px gaps centred horizontally.
-        let gap_px: f32 = 2.0;
+        // Layout: BAR_COUNT narrow bars with a 1 px gap, centred horizontally.
+        let gap_px: f32 = 1.0;
         let total_gap = gap_px * (BAR_COUNT as f32 - 1.0);
-        let bar_w = ((canvas_w - total_gap) / BAR_COUNT as f32).max(2.0);
+        let bar_w = ((canvas_w - total_gap) / BAR_COUNT as f32).max(1.0);
         let used_w = bar_w * BAR_COUNT as f32 + total_gap;
         let x_start = (canvas_w - used_w).max(0.0) / 2.0;
 
+        let center_y = canvas_h / 2.0;
         let color = self.bar_color(theme);
 
         for i in 0..BAR_COUNT {
@@ -127,9 +135,14 @@ impl<M> canvas::Program<M, Theme, Renderer> for EqualizerCanvas {
                 Side::Right => BAR_COUNT - 1 - i,
             };
             let h_norm = self.snapshot.heights[idx].clamp(0.0, 1.0);
+            if h_norm < 0.01 {
+                // Skip near-zero bars entirely (idle, or far below floor).
+                continue;
+            }
             let bar_h = (canvas_h * h_norm).max(1.0);
             let x = x_start + i as f32 * (bar_w + gap_px);
-            let y = canvas_h - bar_h;
+            // Grow both up and down from the vertical centre.
+            let y = (center_y - bar_h / 2.0).max(0.0);
 
             frame.fill_rectangle(Point::new(x, y), Size::new(bar_w, bar_h), color);
         }
@@ -170,10 +183,15 @@ pub fn compute_targets(
     last_meter: Option<crate::MeterSample>,
     elapsed_seconds: f32,
 ) -> [f32; BAR_COUNT] {
-    let mut out = [IDLE_HEIGHT; BAR_COUNT];
+    let mut out = [0.0_f32; BAR_COUNT];
     match state {
         DaemonState::Idle => {
-            // Static baseline.
+            // The applet hides itself when idle (see lib.rs view()), so this
+            // value never reaches the screen. Keep a small floor so EMA
+            // doesn't snap to 0 between sessions.
+            for v in out.iter_mut() {
+                *v = IDLE_HEIGHT;
+            }
         }
         DaemonState::Error => {
             // Error flash: full height, the color path turns it red.
@@ -196,13 +214,23 @@ pub fn compute_targets(
                 Some(m) => (m.peak_db as f32, m.rms_db as f32),
                 None => (-60.0, -60.0),
             };
-            // Weighted blend favouring peak — feels snappier.
             let mixed_db = 0.7 * peak_db + 0.3 * rms_db;
             // Map [-60, 0] dB -> [IDLE_HEIGHT, 1.0] linearly. Clamp.
             let normalized = ((mixed_db + 60.0) / 60.0).clamp(0.0, 1.0);
             let base = IDLE_HEIGHT + (1.0 - IDLE_HEIGHT) * normalized;
             for (i, v) in out.iter_mut().enumerate() {
-                let weighted = base * BAR_WEIGHTS[i];
+                let weight = BAR_WEIGHTS[i];
+                // Per-bar oscillation: each bar has its own frequency and
+                // phase so adjacent bars move out of sync, giving the wavy
+                // look. Amplitude scales with loudness so a quiet signal
+                // stays bell-shaped.
+                let wiggle_freq = 1.7 + (i as f32) * 0.23;
+                let wiggle_phase = (i as f32) * 1.1;
+                let wiggle = (elapsed_seconds * std::f32::consts::TAU * wiggle_freq
+                    + wiggle_phase)
+                    .sin();
+                let modulator = 1.0 + wiggle * WIGGLE_DEPTH * normalized;
+                let weighted = base * weight * modulator;
                 *v = weighted.clamp(0.05, 1.0);
             }
         }
@@ -224,23 +252,31 @@ mod tests {
     }
 
     #[test]
-    fn recording_at_zero_db_is_near_full_height_in_middle_bar() {
-        let t = compute_targets(
-            DaemonState::Recording,
-            Some(MeterSample {
-                peak_db: 0.0,
-                rms_db: 0.0,
-            }),
-            0.0,
-        );
-        // Centre bar has weight 1.2 so it gets clamped at 1.0.
-        assert!(t[3] > 0.95);
-        // Edge bars (weight 0.6) should be ~0.6.
-        assert!(t[0] > 0.5 && t[0] < 0.7);
+    fn recording_at_zero_db_drives_centre_bar_high() {
+        // Sample several phases so the per-bar wiggle averages out.
+        let centre = BAR_COUNT / 2;
+        let mut max_centre = 0.0f32;
+        for n in 0..30 {
+            let t = compute_targets(
+                DaemonState::Recording,
+                Some(MeterSample {
+                    peak_db: 0.0,
+                    rms_db: 0.0,
+                }),
+                n as f32 * 0.033,
+            );
+            if t[centre] > max_centre {
+                max_centre = t[centre];
+            }
+        }
+        // Centre bar (weight 1.2) clamps near 1.0 at full loudness.
+        assert!(max_centre > 0.95, "centre bar never reached 0.95 ({max_centre})");
     }
 
     #[test]
     fn recording_at_minus_60_db_is_near_idle() {
+        // At -60 dB the loudness modulator is 0, so wiggle has no effect and
+        // every bar collapses to IDLE_HEIGHT * weight.
         let t = compute_targets(
             DaemonState::Recording,
             Some(MeterSample {
@@ -249,9 +285,8 @@ mod tests {
             }),
             0.0,
         );
-        // Below the floor maps to IDLE_HEIGHT * weight, then clamped at 0.05.
         for v in t {
-            assert!(v <= IDLE_HEIGHT * 1.2 + 1e-3);
+            assert!(v <= IDLE_HEIGHT * 1.21 + 1e-3);
             assert!(v >= 0.05 - 1e-6);
         }
     }
@@ -268,7 +303,7 @@ mod tests {
             0.0,
         );
         for v in t {
-            assert!(v <= IDLE_HEIGHT * 1.2 + 1e-3);
+            assert!(v <= IDLE_HEIGHT * 1.21 + 1e-3);
         }
     }
 

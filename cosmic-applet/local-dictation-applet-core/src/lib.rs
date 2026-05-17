@@ -191,6 +191,20 @@ impl cosmic::Application for Applet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
+        // When the daemon is idle and no error flash is in flight, the applet
+        // is hidden — return a zero-sized space so the panel reflows around it.
+        let visible = !matches!(self.daemon_state, DaemonState::Idle)
+            || self.error_started_at.is_some();
+        if !visible {
+            return autosize::autosize(
+                cosmic::widget::Space::new()
+                    .width(Length::Fixed(0.0))
+                    .height(Length::Fixed(0.0)),
+                AUTOSIZE_ID.clone(),
+            )
+            .into();
+        }
+
         // The equalizer canvas is the entire applet surface. We bake the side
         // into the program so left/right can differ visually.
         let program = equalizer::EqualizerCanvas {
@@ -204,13 +218,13 @@ impl cosmic::Application for Applet {
             error_active: self.error_started_at.is_some(),
         };
 
-        // Layout: 7 bars of ~8 px + 6 gaps of 2 px = 68 px usable + padding.
-        // Use the panel's suggested size so we match the height of neighbour
+        // Layout: 15 narrow bars (~5 px + 1 px gap) need ~90 px usable.
+        // Use the panel's suggested size for height so we match neighbour
         // applets like CosmicAppletTime.
         let (_, h) = self.core.applet.suggested_size(true);
         let panel_h = h.max(20) as f32;
         let canvas_widget = canvas(program)
-            .width(Length::Fixed(80.0))
+            .width(Length::Fixed(100.0))
             .height(Length::Fixed(panel_h));
 
         autosize::autosize(canvas_widget, AUTOSIZE_ID.clone()).into()
