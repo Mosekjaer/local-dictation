@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "local-dictation-applet-core",
+    "local-dictation-applet-left",
+    "local-dictation-applet-right",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# libcosmic is consumed from a single source URL so transitive crates that
+# depend on `libcosmic` / `cosmic-config` without their own rev pin resolve
+# to the same package. The actual rev is locked at `Cargo.lock` time — see
+# the workspace `Cargo.lock` for the exact commit hash. Plan 0002 targets
+# 564ef834cec33a948dc10c9b401cf29db5d18373 (matches cosmic-applets
+# epoch-1.0.13).
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["applet", "tokio", "wayland"] }
+tokio = { version = "1", features = ["rt", "macros", "io-util", "net", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+

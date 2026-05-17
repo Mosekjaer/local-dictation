@@ -17,11 +17,13 @@ from __future__ import annotations
 import logging
 import signal
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from . import audio, ipc, logging_setup
 from .config import Config
+from .events import EventsServer
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ class _Daemon:
         self._output: Optional[Any] = None
         self._notifier: Optional[Any] = None
         self._worker: Optional[threading.Thread] = None
+        self._events: Optional[EventsServer] = None
 
     # ---- component lifecycle ----
 
@@ -49,7 +52,20 @@ class _Daemon:
         if self._recorder is None:
             from .audio import Recorder
 
-            self._recorder = Recorder(self._config)
+            def _meter_cb(peak_db: float, rms_db: float) -> None:
+                events = self._events
+                if events is None:
+                    return
+                events.publish(
+                    {
+                        "type": "meter",
+                        "peak_db": peak_db,
+                        "rms_db": rms_db,
+                        "ts": time.time(),
+                    }
+                )
+
+            self._recorder = Recorder(self._config, meter_callback=_meter_cb)
         if self._transcriber is None:
             from .transcribe import Transcriber
 
@@ -64,12 +80,22 @@ class _Daemon:
             self._notifier = Notifier(self._config)
 
     def _notify(self, state: State, detail: str = "") -> None:
-        if self._notifier is None:
-            return
-        try:
-            self._notifier.on_state(state, detail)
-        except Exception as exc:  # pragma: no cover - notifier must not raise
-            log.warning("notifier raised (suppressed): %s", exc)
+        if self._notifier is not None:
+            try:
+                self._notifier.on_state(state, detail)
+            except Exception as exc:  # pragma: no cover - notifier must not raise
+                log.warning("notifier raised (suppressed): %s", exc)
+        # Broadcast state to event subscribers (the panel applet, etc.).
+        # Fires after the desktop notifier so observers see them in order.
+        events = self._events
+        if events is not None:
+            events.publish(
+                {
+                    "type": "state",
+                    "state": state.value,
+                    "ts": time.time(),
+                }
+            )
 
     # ---- request handling ----
 
@@ -261,6 +287,13 @@ def run(config: Config) -> int:
 
     daemon = _Daemon(config)
 
+    events = EventsServer(
+        config.events_socket_path,
+        get_state=lambda: daemon._state,
+    )
+    events.start()
+    daemon._events = events
+
     # Signal handling: ipc.serve catches KeyboardInterrupt/SystemExit, so
     # translate SIGTERM into SystemExit to unwind cleanly.
     def _on_term(signum: int, _frame: Any) -> None:
@@ -277,9 +310,11 @@ def run(config: Config) -> int:
     except OSError as exc:
         log.error("ipc.serve failed: %s", exc)
         daemon.shutdown()
+        events.stop()
         return 1
     finally:
         daemon.shutdown()
+        events.stop()
 
     log.info("daemon exited")
     return 0

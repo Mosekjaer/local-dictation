@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Local Dictation Equalizer (Right)
+Comment=Equalizer visualisation for the local-dictation daemon (right of clock)
+Exec=local-dictation-applet-right
+Icon=audio-input-microphone-symbolic
+Terminal=false
+Categories=COSMIC;
+NoDisplay=true
+X-COSMIC-Applet=true

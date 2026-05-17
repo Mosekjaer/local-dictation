@@ -163,6 +163,34 @@ def _check_systemctl_user() -> Check:
     )
 
 
+def _check_events_socket_dir(config: Config) -> Check:
+    parent = config.events_socket_path.parent
+    test_file: Path | None = None
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        test_file = parent / ".doctor-events-write-test"
+        test_file.write_text("ok")
+        return Check(
+            "events-socket-dir-writable",
+            "OK",
+            str(parent),
+            required=False,
+        )
+    except OSError as e:
+        return Check(
+            "events-socket-dir-writable",
+            "WARN",
+            f"{parent}: {e}; COSMIC applet broadcast will be disabled",
+            required=False,
+        )
+    finally:
+        if test_file is not None:
+            try:
+                test_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _check_cosmic_desktop() -> Check:
     val = os.environ.get("XDG_CURRENT_DESKTOP", "")
     if "COSMIC" in val.upper():
@@ -213,5 +241,6 @@ def run_checks(config: Config) -> list[Check]:
     )
     checks.append(_check_systemctl_user())
     checks.append(_check_cosmic_desktop())
+    checks.append(_check_events_socket_dir(config))
 
     return checks

@@ -49,3 +49,9 @@ log_level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 # Unix socket the CLI uses to talk to the daemon. Defaults to
 # $XDG_RUNTIME_DIR/local-dictation.sock; override only if you know why.
 # socket_path = "/run/user/1000/local-dictation.sock"
+
+# Push-style event broadcast socket consumed by the COSMIC panel applet.
+# Subscribers receive newline-delimited JSON events (state, meter, hello).
+# Defaults to $XDG_RUNTIME_DIR/local-dictation-events.sock; override only
+# if you know why. Permissions are forced to 0600.
+# events_socket_path = "/run/user/1000/local-dictation-events.sock"

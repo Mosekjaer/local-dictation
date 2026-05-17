@@ -61,20 +61,35 @@ class Config:
     socket_path: Path = field(
         default_factory=lambda: _xdg_runtime_dir() / "local-dictation.sock"
     )
+    events_socket_path: Path = field(
+        default_factory=lambda: _xdg_runtime_dir() / "local-dictation-events.sock"
+    )
 
     @classmethod
     def default_config_path(cls) -> Path:
         return _expand("~/.config/local-dictation/config.toml")
 
     def ensure_dirs(self) -> None:
-        for p in (self.temp_dir, self.log_file.parent, self.socket_path.parent):
+        for p in (
+            self.temp_dir,
+            self.log_file.parent,
+            self.socket_path.parent,
+            self.events_socket_path.parent,
+        ):
             try:
                 p.mkdir(parents=True, exist_ok=True)
             except (PermissionError, FileExistsError):
                 pass
 
 
-_PATH_FIELDS = {"whisper_cli", "model", "temp_dir", "log_file", "socket_path"}
+_PATH_FIELDS = {
+    "whisper_cli",
+    "model",
+    "temp_dir",
+    "log_file",
+    "socket_path",
+    "events_socket_path",
+}
 
 
 def load(path: Path | None = None) -> Config:

@@ -28,6 +28,10 @@ VENV_DIR="${HOME}/.local/share/local-dictation"
 CONFIG_DIR="${HOME}/.config/local-dictation"
 CACHE_DIR="${HOME}/.cache/local-dictation"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+APPLET_BIN_LEFT="${HOME}/.local/bin/local-dictation-applet-left"
+APPLET_BIN_RIGHT="${HOME}/.local/bin/local-dictation-applet-right"
+APPLET_DESKTOP_LEFT="${HOME}/.local/share/applications/local-dictation-applet-left.desktop"
+APPLET_DESKTOP_RIGHT="${HOME}/.local/share/applications/local-dictation-applet-right.desktop"
 
 info() { printf '[uninstall] %s\n' "$*"; }
 
@@ -57,6 +61,17 @@ if [[ -d "${VENV_DIR}" ]]; then
     rm -rf "${VENV_DIR}"
     info "removed ${VENV_DIR}"
 fi
+
+# 5b. Remove COSMIC applet binaries and .desktop entries (if present).
+# Never touches ~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center —
+# that is user data; the user removes the IDs themselves.
+for f in "${APPLET_BIN_LEFT}" "${APPLET_BIN_RIGHT}" \
+         "${APPLET_DESKTOP_LEFT}" "${APPLET_DESKTOP_RIGHT}"; do
+    if [[ -e "${f}" ]]; then
+        rm -f "${f}"
+        info "removed ${f}"
+    fi
+done
 
 # 6. Purge config + cache when asked.
 if [[ "${PURGE}" -eq 1 ]]; then

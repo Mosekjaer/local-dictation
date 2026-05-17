@@ -1,0 +1,13 @@
+[package]
+name = "local-dictation-applet-left"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "local-dictation-applet-left"
+path = "src/main.rs"
+
+[dependencies]
+local-dictation-applet-core = { path = "../local-dictation-applet-core" }
+libcosmic.workspace = true

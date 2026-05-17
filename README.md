@@ -42,6 +42,21 @@ The installer:
 Run `local-dictation doctor` after installation to verify the
 environment.
 
+To also build the optional COSMIC panel applet (real-time equalizer
+flanking the datetime applet), pass `--with-applet`:
+
+```
+./install.sh --with-applet
+```
+
+This adds a `cargo install` step for two Rust binaries
+(`local-dictation-applet-left`, `local-dictation-applet-right`) and
+drops two `.desktop` files into `~/.local/share/applications/`. Cold
+build takes ~2 minutes. After install you must edit
+`~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center` to
+add the two applet IDs around `CosmicAppletTime` — the installer prints
+the exact lines.
+
 ## COSMIC keyboard shortcut
 
 COSMIC does not expose a global hotkey API, so the daemon listens on a
@@ -143,6 +158,40 @@ and cache directories alone.
 
 Also removes `~/.config/local-dictation/` and
 `~/.cache/local-dictation/`.
+
+## Optional: COSMIC panel applet
+
+A real-time equalizer that sits in the COSMIC panel, flanking the
+datetime applet, and reflects daemon state visually:
+
+- **Idle**: bars collapsed to a thin baseline.
+- **Recording**: 7 bars driven by live RMS/peak audio levels at ~10 Hz.
+- **Transcribing**: bars pulse at 1.5 Hz.
+- **Error**: brief red flash.
+
+Two binaries (one for each side of the datetime applet) are built from a
+shared Rust crate under `cosmic-applet/`. The daemon publishes events on
+`$XDG_RUNTIME_DIR/local-dictation-events.sock` (separate from the main
+IPC socket); the applet binaries subscribe.
+
+Install with `./install.sh --with-applet`. The installer prints the exact
+panel-config snippet to paste into
+`~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center`. After
+editing, restart the panel:
+
+```
+systemctl --user restart cosmic-panel.service \
+  || pkill cosmic-panel
+```
+
+The applet is gated by the broadcast socket — if the daemon isn't
+running or its events socket can't be created (check `doctor`), the
+applet shows `idle` and reconnects on a 200ms→5s backoff.
+
+The pinned libcosmic git rev is recorded in `cosmic-applet/README.md`.
+On COSMIC point releases, rebuild the workspace
+(`cd cosmic-applet && cargo build --release`); on a major COSMIC version
+bump, update the pin to match.
 
 ## Known Wayland limitations
 
