@@ -1,39 +1,40 @@
 # Implementation Plan: COSMIC panel applet — local-dictation equalizer
 
-Status: draft
-Execution state: not started
+Status: revised
+Execution state: in progress (open questions Q1–Q4 resolved 2026-05-17; Q5 delegated to Agent B at Phase 3 start)
 
 ## Goal
 
-Build a COSMIC panel applet (`local-dictation-applet`) that visualises the state of the existing `local-dictation` daemon as a small equalizer widget in the COSMIC panel. The applet reflects four states — `idle`, `recording` (with live audio bars), `transcribing` (pulsing animation), `error` — and is intended to sit in the panel center group, with two instances flanking the datetime applet.
+Build two COSMIC panel applet binaries — `local-dictation-applet-left` and `local-dictation-applet-right` — that visualise the state of the existing `local-dictation` daemon as small equalizer widgets in the COSMIC panel. Each is a distinct applet ID listed in `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center` so they appear in the panel center group, flanking the `com.system76.CosmicAppletTime` applet. The applets reflect four daemon states — `idle`, `recording` (with live audio bars), `transcribing` (pulsing animation), `error`.
 
-The applet is a separate Rust crate that depends on libcosmic and Iced. It talks to the existing Python daemon via a new push-style Unix socket. Audio levels are produced by adding an `astats` filter to the existing ffmpeg recorder; no new audio backend.
+The two binaries are built from one Rust workspace with a shared `local-dictation-applet-core` library crate and two thin binary crates that only differ in argv-driven side (`Side::Left` / `Side::Right`). They depend on libcosmic + Iced from the COSMIC 1.0 release tag. They talk to the existing Python daemon via a new push-style Unix socket. Audio levels come from an `astats` filter added to the existing ffmpeg recorder; no new audio backend.
 
 ## Requirements
 
-- [ ] New Rust workspace `cosmic-applet/` inside this repo with one binary crate `local-dictation-applet`
-- [ ] Applet renders an equalizer (N bars, configurable, default 7) that animates per state
-- [ ] Live bar heights driven by audio peak+RMS dB values streamed from the daemon at ≥10 Hz during recording
+- [ ] New Rust workspace `cosmic-applet/` inside this repo: one shared library crate `local-dictation-applet-core` + two binary crates `local-dictation-applet-left` and `local-dictation-applet-right`
+- [ ] Applet renders an equalizer of **7 bars** that animates per state, redrawing at **30 fps**
+- [ ] Live bar heights driven by audio peak+RMS dB values streamed from the daemon at **10 Hz** during recording
 - [ ] Idle: bars collapse to a thin baseline
 - [ ] Recording: bars driven by real-time peak/RMS
 - [ ] Transcribing: bars pulse with a fixed sinusoidal waveform
 - [ ] Error: bars flash red once, then idle
 - [ ] Daemon exposes a new push-style Unix socket at `$XDG_RUNTIME_DIR/local-dictation-events.sock` (`0600`) emitting newline-delimited JSON events (state, meter)
 - [ ] Daemon's existing request/response socket (`local-dictation.sock`) is **unchanged**
-- [ ] Recorder produces RMS+peak metrics during recording without writing a second WAV stream
+- [ ] Recorder produces RMS+peak metrics during recording without writing a second WAV stream, using ffmpeg `astats` + `ametadata=print` on a numbered pipe (fd 3)
 - [ ] Applet survives daemon restart: reconnects with backoff, shows `idle` (or `error` if the daemon was down >1 s)
-- [ ] Two applet instances can sit on the panel — either as two slots in the panel config OR as one applet drawing both sides of the datetime (decision deferred to Phase 4)
-- [ ] `cargo install --path cosmic-applet/local-dictation-applet --root ~/.local` installs the binary
-- [ ] An XDG `.desktop` file + COSMIC applet manifest let the panel discover and place the applet
+- [ ] Two distinct applet IDs registered in `plugins_center`: `local-dictation-applet-left` (before `CosmicAppletTime`) and `local-dictation-applet-right` (after). No `.applet.ron` manifest is required — COSMIC discovers applets by ID-to-binary lookup on `$PATH`
+- [ ] `cargo install --path cosmic-applet/local-dictation-applet-left --root ~/.local` and the analogous command for `-right` install both binaries
+- [ ] An XDG `.desktop` file per binary (for COSMIC Settings discoverability — not required for panel runtime, but useful)
 - [ ] No changes to existing local-dictation success criteria; the daemon must run with or without the applet listening
+- [ ] After install, user must edit `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center` to insert the two applet IDs around `com.system76.CosmicAppletTime`. `install.sh --with-applet` prints the exact `dconf`-style edit needed.
 
 ## Assumptions
 
-- [ ] Pop!_OS COSMIC alpha (≥ March 2026) is the only supported target; the libcosmic API may break between COSMIC releases. Verified locally: `cargo 1.95.0`, `rustc 1.95.0`. Verify by `cosmic-comp --version` against the libcosmic git rev pinned in Cargo.toml.
-- [ ] libcosmic is consumed from git (no crates.io release as of 2026-05). Pinning to a specific commit avoids accidental breakage on `cargo update`.
-- [ ] COSMIC panel discovers user applets via XDG_DATA_DIRS lookup of `applications/` `.desktop` files plus a COSMIC-specific applet manifest. Verify by reading `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/` and the `cosmic-applets` package layout on the system.
+- [ ] Pop!_OS COSMIC **1.0 stable** is the target (verified: `cosmic-comp 1.0.0`, `cosmic-panel 0.1.0~1773858049~24.04~d518c7d`). libcosmic API churn risk drops from "High" to "Medium" because there's now a release tag to pin against. Verified locally: `cargo 1.95.0`, `rustc 1.95.0`.
+- [ ] libcosmic is consumed from git, pinned to a rev matching the COSMIC 1.0 release (Agent B's first step: identify and pin that rev). Avoids `cargo update` breakage.
+- [ ] COSMIC panel discovers applets purely by **ID-to-binary lookup on `$PATH`** — the panel reads `plugins_center` / `plugins_wings` and execs a binary whose name matches the ID (e.g. ID `cosmic-applet-time` → `/usr/bin/cosmic-applet-time`). **No `.applet.ron` manifest exists or is required.** Verified by inspecting `/usr/bin/cosmic-applet-*` and the absence of any `applets/` manifest dir. A `.desktop` file is helpful for COSMIC Settings discoverability but is not on the panel's hot path.
 - [ ] The applet runs as a normal user process. No root, no uinput, no setuid.
-- [ ] ffmpeg's `astats` audio filter is available in the system ffmpeg (verified: `ffmpeg -filters | grep astats` should list it on Pop!_OS 24.04).
+- [ ] ffmpeg's `astats` audio filter is available (verified: `ffmpeg 6.1.1`'s `-filters` output lists `astats`).
 - [ ] The daemon process is the sole producer of meter events; subscribers are read-only.
 
 ## Agent Team Readiness
@@ -69,25 +70,30 @@ The applet is a separate Rust crate that depends on libcosmic and Iced. It talks
 ### Agent: applet (Agent B)
 
 - [ ] Owns:
-  - `cosmic-applet/Cargo.toml` — workspace manifest
-  - `cosmic-applet/local-dictation-applet/Cargo.toml`
-  - `cosmic-applet/local-dictation-applet/src/main.rs`
-  - `cosmic-applet/local-dictation-applet/src/subscriber.rs` — Unix-socket reader
-  - `cosmic-applet/local-dictation-applet/src/equalizer.rs` — bar widget
-  - `cosmic-applet/local-dictation-applet/src/state.rs` — Iced app state
-  - `cosmic-applet/local-dictation-applet/resources/com.frederik.LocalDictationApplet.desktop`
-  - `cosmic-applet/local-dictation-applet/resources/com.frederik.LocalDictationApplet.applet.ron` (or whatever COSMIC's manifest format settles on)
+  - `cosmic-applet/Cargo.toml` — workspace manifest listing core lib + two binary crates
+  - `cosmic-applet/local-dictation-applet-core/Cargo.toml`
+  - `cosmic-applet/local-dictation-applet-core/src/lib.rs` — public API: `run_applet(side: Side)`
+  - `cosmic-applet/local-dictation-applet-core/src/subscriber.rs` — Unix-socket reader
+  - `cosmic-applet/local-dictation-applet-core/src/equalizer.rs` — bar widget (7 bars, 30 fps)
+  - `cosmic-applet/local-dictation-applet-core/src/state.rs` — Iced app state + Side enum
+  - `cosmic-applet/local-dictation-applet-left/Cargo.toml`
+  - `cosmic-applet/local-dictation-applet-left/src/main.rs` — `fn main() { core::run_applet(Side::Left) }`
+  - `cosmic-applet/local-dictation-applet-right/Cargo.toml`
+  - `cosmic-applet/local-dictation-applet-right/src/main.rs` — `fn main() { core::run_applet(Side::Right) }`
+  - `cosmic-applet/resources/local-dictation-applet-left.desktop`
+  - `cosmic-applet/resources/local-dictation-applet-right.desktop`
 - [ ] Does NOT touch: anything under `local_dictation/`
 - [ ] Responsibilities:
+  - Pin libcosmic to a git rev matching COSMIC 1.0 release (record the rev in `cosmic-applet/README.md` and in workspace `Cargo.toml`)
   - Subscribe to the broadcast socket, decode JSON events
-  - Iced app rendering N bars with smoothing
-  - Reconnect on EOF / refused with capped exponential backoff
+  - Iced app rendering 7 bars with EMA smoothing (α=0.4), 30 fps redraw
+  - Reconnect on EOF / refused with capped exponential backoff (200 ms → 5 s)
   - Theme integration via libcosmic's theme API (light/dark follow)
-- [ ] Produces: a runnable applet binary + installable manifest
+- [ ] Produces: two runnable applet binaries + two `.desktop` files
 - [ ] Validation:
-  - `cargo build --release` from workspace root
-  - `cargo test` in the applet crate
-  - `cargo run --release` outside the panel — opens a standalone window showing the equalizer; toggling the daemon visibly drives the bars
+  - `cargo build --release` from `cosmic-applet/` workspace root
+  - `cargo test` in the workspace
+  - `./target/release/local-dictation-applet-left --standalone` (and `-right`) — opens a standalone window; toggling the live daemon visibly drives the bars
 
 ## Affected Files
 
@@ -98,15 +104,13 @@ The applet is a separate Rust crate that depends on libcosmic and Iced. It talks
 - [ ] `config.example.toml` — document `events_socket_path`
 - [ ] `tests/test_events_protocol.py` — **new**, encoder/decoder roundtrip, slow-consumer drop policy
 - [ ] `cosmic-applet/Cargo.toml` — workspace
-- [ ] `cosmic-applet/local-dictation-applet/Cargo.toml` — applet crate
-- [ ] `cosmic-applet/local-dictation-applet/src/main.rs` — entry point, libcosmic applet bootstrap
-- [ ] `cosmic-applet/local-dictation-applet/src/subscriber.rs` — Unix socket reader, JSON decode, channel to UI
-- [ ] `cosmic-applet/local-dictation-applet/src/equalizer.rs` — bar widget, smoothing, idle/recording/transcribing/error visual states
-- [ ] `cosmic-applet/local-dictation-applet/src/state.rs` — Iced app `Model` / `Message` types
-- [ ] `cosmic-applet/local-dictation-applet/resources/*.desktop` — XDG launcher entry
-- [ ] `cosmic-applet/local-dictation-applet/resources/*.applet.ron` — COSMIC applet manifest (format TBD per Q4)
-- [ ] `README.md` — new section: "Optional: COSMIC panel applet"
-- [ ] `install.sh` — extend to optionally build + install the applet (gated behind `--with-applet`)
+- [ ] `cosmic-applet/local-dictation-applet-core/{Cargo.toml, src/lib.rs, src/subscriber.rs, src/equalizer.rs, src/state.rs}` — shared crate, all UI + IO logic
+- [ ] `cosmic-applet/local-dictation-applet-left/{Cargo.toml, src/main.rs}` — thin binary, calls `core::run_applet(Side::Left)`
+- [ ] `cosmic-applet/local-dictation-applet-right/{Cargo.toml, src/main.rs}` — thin binary, calls `core::run_applet(Side::Right)`
+- [ ] `cosmic-applet/resources/local-dictation-applet-left.desktop` — XDG launcher entry
+- [ ] `cosmic-applet/resources/local-dictation-applet-right.desktop` — XDG launcher entry
+- [ ] `README.md` — new section: "Optional: COSMIC panel applet" with exact `plugins_center` edit instructions
+- [ ] `install.sh` — extend to optionally build + install both binaries (gated behind `--with-applet`)
 
 ## Dependencies
 
@@ -211,25 +215,21 @@ class Recorder:
   - Decision: per-subscriber bounded queue (`queue.Queue(maxsize=64)`). Sender thread does `put_nowait`; on `Full`, increments a per-subscriber drop counter. ≥5 consecutive drops → disconnect the subscriber. The daemon never blocks recording on a slow applet.
   - Evidence: this matches the constraint "applet must not affect dictation behaviour"
 
-- [ ] Concern: **two-applet-instances** (Q4)
-  - Owner: applet (Agent B) + lead
-  - Decision: defer to Phase 4; first attempt is to add two entries with distinct applet IDs to the COSMIC panel config. If COSMIC's applet runtime rejects two instances of the same binary, fall back to a single applet that renders two equalizers as one wide widget (the panel still places it in one slot, but the visual sits across both sides). The fallback is purely a UI rearrangement, no protocol change.
-  - Evidence: COSMIC panel config (`com.system76.CosmicPanel.Panel/v1/`) is a plain RON/TOML file listing applet entries; two entries with the same applet name may or may not spawn two processes. Confirm before designing around it.
+- [ ] Concern: **two-applet-instances** (Q4 — resolved 2026-05-17)
+  - Owner: applet (Agent B)
+  - Decision: ship **two distinct binaries with two distinct IDs** (`local-dictation-applet-left` and `local-dictation-applet-right`). Each is a thin wrapper around the shared core crate, differing only in the `Side` enum value passed in. The user's panel `plugins_center` already lists the IDs around `CosmicAppletTime` (current values `super-stt-cosmic-applet-{left,right}` will be renamed by the user to the new IDs as part of install).
+  - Evidence: inspected `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center`; existing third-party applets like `net.tropicbliss.CosmicExtAppletCaffeine` confirm panel applets are looked up by ID-to-binary on `$PATH`.
 
 - [ ] Concern: **idempotent-install**
   - Owner: lead
-  - Decision: `install.sh --with-applet` runs `cargo install --path cosmic-applet/local-dictation-applet --root ~/.local`, copies the `.desktop` file to `~/.local/share/applications/`, copies the applet manifest to `~/.local/share/cosmic/applets/` (or wherever COSMIC's discovery path settles), and prints instructions to add the applet via COSMIC Settings. Uninstall removes all three artefacts.
-  - Evidence: standard XDG paths; `cargo install` is idempotent
+  - Decision: `install.sh --with-applet` runs `cargo install --path cosmic-applet/local-dictation-applet-left --root ~/.local` and the analogous command for `-right`. Copies both `.desktop` files to `~/.local/share/applications/`. Prints a "Next steps" block telling the user the exact lines to add to `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_center` (the file is a RON-encoded `Option<Vec<String>>`; editing it requires care). Does **not** auto-edit panel config — too risky. Uninstall removes both binaries + both `.desktop` files; `--purge` does not touch panel config either.
+  - Evidence: standard XDG paths; `cargo install` is idempotent; panel config is user data and must not be modified silently
 
 ## Risks
 
-- [ ] **High**: libcosmic API churn breaks the applet on the next COSMIC update.
-  - Mitigation: pin libcosmic to a known-good git rev; document the rev in the README; CI is out of scope but a manual rebuild check after every COSMIC release is.
+- [ ] **Medium**: libcosmic API churn breaks the applet on the next COSMIC update. (Downgraded from High because COSMIC 1.0 is now stable; pin to the 1.0 release rev.)
+  - Mitigation: pin libcosmic to the known-good rev; document the rev in `cosmic-applet/README.md`; manual rebuild check after every COSMIC release.
   - Owner: applet
-
-- [ ] **Medium**: COSMIC's applet runtime does not allow two instances of the same applet binary.
-  - Mitigation: Phase 4 experiment confirms this first. Fallback design (one applet drawing both sides) is sketched but not implemented unless needed.
-  - Owner: applet + lead
 
 - [ ] **Medium**: ffmpeg `astats` output rate is not exactly 10 Hz; it depends on input frame size. The applet's smoothing must tolerate jitter.
   - Mitigation: applet uses an exponential moving average with a time-constant tuned for ~5–15 Hz input. Plan validates the actual event rate.
@@ -346,30 +346,23 @@ class Recorder:
   - Risk: Low
   - Evidence: standard rust test pattern
 
-### Phase 4: panel integration + install (applet agent + lead, after Phase 2 & 3)
+### Phase 4: panel integration + install (lead, after Phase 2 & 3)
 
-- [ ] Author the COSMIC applet manifest (`resources/com.frederik.LocalDictationApplet.applet.ron` or current format) + XDG `.desktop` file
-  - Action: read an existing COSMIC system applet manifest as a template; copy and rename.
-  - Why: required for COSMIC panel discovery
-  - Dependencies: Phase 3 binary
-  - Risk: Medium (the exact format may change; reference the local COSMIC install)
-  - Evidence: `/usr/share/cosmic/applets/` on this machine should contain templates
+- [ ] Author two XDG `.desktop` files — `local-dictation-applet-left.desktop` and `-right.desktop` — in `cosmic-applet/resources/`
+  - Action: copy a standard `.desktop` shape; `Exec=local-dictation-applet-left`, `Categories=COSMIC;`, `NoDisplay=true` (these are applets, not application launcher entries).
+  - Why: improves COSMIC Settings discoverability; not required for panel runtime but good citizenship.
+  - Dependencies: Phase 3 binaries
+  - Risk: Low
+  - Evidence: standard XDG `.desktop` format
 
-- [ ] Experiment: try adding two entries with the same applet ID to `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/`; verify whether COSMIC spawns two processes and renders two widgets
-  - Action: edit the panel config, restart `cosmic-panel`, observe.
-  - Why: confirms whether two-instance design works
-  - Dependencies: Phase 3 binary installed
-  - Risk: Medium (if it fails, fall back to the single-widget design — see Cross-Cutting Concerns)
-  - Evidence: Q4
-
-- [ ] Extend `install.sh` with `--with-applet` flag: `cargo install --path cosmic-applet/local-dictation-applet --root $HOME/.local`, copy `.desktop` to `~/.local/share/applications/`, copy manifest to `~/.local/share/cosmic/applets/`, print the COSMIC Settings instructions
-  - Action: shell glue, no rust changes.
+- [ ] Extend `install.sh` with `--with-applet` flag
+  - Action: `cargo install --path cosmic-applet/local-dictation-applet-left --root $HOME/.local`, ditto `-right`. Copy both `.desktop` files to `~/.local/share/applications/`. Print a "Next steps" block with the exact panel-config lines the user must add (a short shell snippet showing the file path and current vs target contents of `plugins_center`).
   - Why: one-command optional install
-  - Dependencies: Phase 3 binary
+  - Dependencies: Phase 3 binaries
   - Risk: Low
   - Evidence: existing `install.sh` patterns
 
-- [ ] Extend `uninstall.sh` to remove `~/.local/bin/local-dictation-applet`, the `.desktop`, and the applet manifest. With `--purge` also remove `~/.cache/local-dictation-applet/` if it exists.
+- [ ] Extend `uninstall.sh` to remove both `~/.local/bin/local-dictation-applet-{left,right}` binaries and both `.desktop` files. Do **not** touch the panel config — that's user data. `--purge` does not change this rule.
   - Action: parallel to existing uninstall logic
   - Why: clean removal
   - Dependencies: install logic
@@ -446,12 +439,8 @@ class Recorder:
 
 ## Open Questions
 
-- [ ] **Q1 — broadcast transport (D-Bus vs Unix socket).** This plan picks **Unix socket** for parity with the existing IPC, no D-Bus name to claim, and trivial Rust consumption via tokio. Confirm or override before Phase 2 starts. D-Bus would buy automatic activation but adds a `dbus-python` (or `jeepney`) dep and a session-name registration concern.
-
-- [ ] **Q2 — audio metering source.** Plan picks **ffmpeg `astats` on a numbered pipe** over PipeWire-native capture or a tee'd second ffmpeg. Confirm. Switching to PipeWire-native is plausible later for lower latency but is a full v2 rewrite of the recorder.
-
-- [ ] **Q3 — bar count and refresh rate.** Plan picks **7 bars at 30 fps applet redraw, driven by 10 Hz meter events.** Open to 5/9/11 bars and to 60 fps if CPU budget allows. Choose before Phase 3 finalises `equalizer.rs`.
-
-- [ ] **Q4 — two-applet-instances vs single-wide-applet.** Plan **tries two instances first** as a Phase 4 experiment; if COSMIC's applet runtime refuses, fall back to a single applet that renders both sides. Need to read `/usr/share/cosmic/applets/` and `~/.config/cosmic/com.system76.CosmicPanel.Panel/v1/` to confirm the panel config supports listing the same applet ID twice. If unknown, accept the risk and proceed.
-
-- [ ] **Q5 — libcosmic version pinning.** Plan pins to a specific git rev in `Cargo.toml`. Confirm: (a) which rev (latest tag on `main` at the start of Phase 3, recorded in the README), and (b) whether to also pin the libcosmic toolchain via `rust-toolchain.toml`. The latter is recommended given alpha churn.
+- [x] **Q1 — broadcast transport** — Resolved 2026-05-17: Unix socket, server-push JSON, at `$XDG_RUNTIME_DIR/local-dictation-events.sock`. Rejected D-Bus to keep zero new Python deps.
+- [x] **Q2 — audio metering source** — Resolved 2026-05-17: ffmpeg `astats` with `ametadata=print` to a numbered pipe (fd 3). `astats` verified present in system ffmpeg 6.1.1.
+- [x] **Q3 — bar count and refresh rate** — Resolved 2026-05-17: 7 bars, 30 fps applet redraw, 10 Hz meter events.
+- [x] **Q4 — two-applet-instances** — Resolved 2026-05-17: two distinct binaries with distinct IDs (`local-dictation-applet-left`, `local-dictation-applet-right`). User's panel config already references two distinct IDs around `CosmicAppletTime`.
+- [ ] **Q5 — libcosmic version pinning** — Open: pin to a specific git rev matching the COSMIC 1.0 release. **Agent B owns picking the exact rev at Phase 3 start** by checking libcosmic's git tags for the `1.0`-aligned release, recording the rev in `cosmic-applet/Cargo.toml` and the workspace README.
